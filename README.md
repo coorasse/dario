@@ -8,7 +8,9 @@ Play them at https://dario.coorasse.com or open `index.html` in a browser and pi
 
 - **Alieni** 👽🚀 (`alieni/`): shoot the big aliens: each one splits into two small aliens, which you vacuum up.
   Watch out, aliens sometimes turn invisible. Defeat all of them to win a trophy 🏆.
-- **Uni** 🦄 (`uni/`): coming soon.
+- **Uni** 🦄 (`uni/`): a city at night, where monsters sit on the roofs and jump on you when you get close.
+  Every time one lands on you, a heart flies away ❤️. The child follows the mouse, and a click shoots the magic
+  torch 🔦. Defeat all the monsters to win a trophy 🏆.
 
 ## Adding a new game
 
