@@ -1,3 +1,6 @@
-FROM nginx:alpine
-COPY . /usr/share/nginx/html/
-EXPOSE 80
+FROM nginxinc/nginx-unprivileged:alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY index.html /usr/share/nginx/html/
+COPY alieni/ /usr/share/nginx/html/alieni/
+COPY uni/ /usr/share/nginx/html/uni/
+EXPOSE 8080
