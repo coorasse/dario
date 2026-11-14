@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Scoppia</title>
+<style>
+  :root {
+    --bg: #3d2c5e;
+    --text: #2b2b52;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    font-family: "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif;
+    background: var(--bg);
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: none; }
+  .pill {
+    position: fixed;
+    top: 12px;
+    font-size: 30px;
+    padding: 4px 18px;
+    border-radius: 40px;
+    background: #fff;
+    color: var(--text);
+    box-shadow: 0 4px 0 #0006;
+    white-space: nowrap;
+  }
+  #remaining { left: 12px; }
+  #trophies {
+    right: 12px;
+    background: #ffd60a;
+    box-shadow: 0 4px 0 #b38f00;
+    max-width: 40vw;
+    white-space: normal;
+    word-break: break-all;
+    text-align: right;
+
+    &:empty { display: none; }
+  }
+  #home {
+    position: fixed;
+    bottom: 12px;
+    left: 12px;
+    font-size: 30px;
+    line-height: 1;
+    padding: 8px 14px;
+    border-radius: 40px;
+    background: #fff;
+    box-shadow: 0 4px 0 #0006;
+    text-decoration: none;
+  }
+  .screen {
+    position: fixed;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    background: #000a;
+    color: #fff;
+    text-align: center;
+    padding: 16px;
+
+    &.show { display: flex; }
+
+    .big {
+      font-size: min(45vw, 260px);
+      line-height: 1;
+      animation: bounce 0.8s ease-in-out infinite alternate;
+    }
+
+    h1 { margin: 0; font-size: 44px; color: #ffd60a; text-shadow: 0 4px 0 #0006; }
+
+    button {
+      font: inherit;
+      font-size: 36px;
+      padding: 12px 40px;
+      border: none;
+      border-radius: 50px;
+      background: #2ec4b6;
+      color: #fff;
+      box-shadow: 0 6px 0 #1a7a71;
+      cursor: pointer;
+    }
+  }
+  @keyframes bounce {
+    from { transform: translateY(0) rotate(-6deg); }
+    to { transform: translateY(-30px) rotate(6deg); }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="remaining" class="pill"></div>
+<div id="trophies" class="pill"></div>
+<a id="home" href="../" aria-label="Torna ai giochi">🏠</a>
+<div id="win" class="screen">
+  <div class="big">🏆</div>
+  <h1>Pum! Hai fatto scoppiare tutti i gonfiabili!</h1>
+  <button class="again">Ancora! 📌</button>
+</div>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const remainingEl = document.getElementById("remaining");
+const trophiesEl = document.getElementById("trophies");
+const winEl = document.getElementById("win");
+
+const TROPHY_KEY = "scoppia-trophies";
+let trophies = 0;
+try { trophies = Number(localStorage.getItem(TROPHY_KEY)) || 0; } catch {}
+
+const ROUNDS = [
+  { r: 62, needed: 5, color: "#ff595e" },
+  { r: 72, needed: 7, color: "#1982c4" },
+  { r: 82, needed: 9, color: "#8ac926" },
+];
+const PLAYER_SPEED = 5;
+const POKE_EVERY = 280;
+const CROWD_COLORS = ["#ff595e", "#ffca3a", "#8ac926", "#1982c4", "#6a4c93", "#ff924c", "#f15bb5"];
+const SKIN_COLORS = ["#ffd6a5", "#f1c27d", "#c68642", "#8d5524", "#ffe0bd"];
+
+let U = 1;
+let A = { cx: 0, cy: 0, rx: 1, ry: 1 };
+let crowd = [];
+let player, balloon, round, particles, texts, over, cheerUntil;
+let pointer = { x: innerWidth / 2, y: innerHeight * 0.7 };
+let pressing = false;
+let cursor = null;
+let audio;
+
+function rand(min, max) { return min + Math.random() * (max - min); }
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
+function depth(y) { return 0.8 + 0.4 * clamp((y - (A.cy - A.ry)) / (2 * A.ry), 0, 1); }
+
+function keepInArena(o, margin) {
+  const rx = A.rx - margin;
+  const ry = A.ry - margin * 0.5;
+  const dx = (o.x - A.cx) / rx;
+  const dy = (o.y - A.cy) / ry;
+  const d = Math.hypot(dx, dy);
+  if (d <= 1) return false;
+  o.x = A.cx + (dx / d) * rx;
+  o.y = A.cy + (dy / d) * ry;
+  return true;
+}
+
+function resize() {
+  canvas.width = innerWidth * devicePixelRatio;
+  canvas.height = innerHeight * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  U = clamp(Math.min(innerWidth / 1000, innerHeight / 700), 0.55, 1.3);
+  A = {
+    cx: innerWidth / 2,
+    cy: innerHeight * 0.66,
+    rx: innerWidth * 0.46,
+    ry: Math.min(innerHeight * 0.28, innerWidth * 0.3),
+  };
+  const top = 70;
+  const bottom = A.cy - A.ry - 16 * U;
+  const rows = 5;
+  const rowHeight = (bottom - top) / rows;
+  const gap = 38 * U;
+  crowd = [];
+  for (let r = 0; r < rows; r++) {
+    for (let x = (r % 2) * gap / 2 + gap / 2; x < innerWidth; x += gap) {
+      crowd.push({
+        x: x + rand(-4, 4), y: top + (r + 1) * rowHeight,
+        shirt: pick(CROWD_COLORS), skin: pick(SKIN_COLORS), phase: rand(0, 6),
+      });
+    }
+  }
+  if (player) keepInArena(player, 20 * U);
+  if (balloon) keepInArena(balloon, balloonRadius());
+}
+addEventListener("resize", resize);
+
+function showHud() {
+  const left = ROUNDS.length - round;
+  remainingEl.textContent = left ? "🎈".repeat(left) : "🏆";
+  trophiesEl.textContent = "🏆".repeat(trophies);
+}
+
+function start() {
+  player = { x: A.cx - A.rx * 0.5, y: A.cy, facing: 1, step: 0, pokeAt: -1000, readyAt: 0, chase: false };
+  pointer = { x: player.x, y: player.y };
+  round = 0;
+  particles = [];
+  texts = [];
+  over = false;
+  cheerUntil = 0;
+  spawnBalloon(performance.now());
+  winEl.classList.remove("show");
+  showHud();
+}
+
+function spawnBalloon(t) {
+  const { r, needed, color } = ROUNDS[round];
+  balloon = {
+    r, needed, color,
+    x: 0, y: 0,
+    pokes: 0, holes: [], hurtAt: -1000,
+    state: "appearing", fade: 0, vanishAt: 0, appearAt: 0, nextAt: 0,
+  };
+  placeAwayFromPlayer(balloon);
+  sparkle(balloon);
+  sounds.appear();
+}
+
+function placeAwayFromPlayer(b) {
+  let best = null;
+  for (let i = 0; i < 12; i++) {
+    const a = rand(0, Math.PI * 2);
+    const d = Math.sqrt(Math.random()) * 0.75;
+    const spot = { x: A.cx + Math.cos(a) * A.rx * d, y: A.cy + Math.sin(a) * A.ry * d };
+    spot.dist = Math.hypot(spot.x - player.x, spot.y - player.y);
+    if (!best || spot.dist > best.dist) best = spot;
+    if (spot.dist > 260 * U) break;
+  }
+  b.x = best.x;
+  b.y = best.y;
+  keepInArena(b, balloonRadius(b));
+}
+
+function balloonRadius(b = balloon) {
+  return b.r * U * depth(b.y) * (1 + 0.05 * b.pokes);
+}
+
+function updateBalloon(b, t) {
+  if (b.state === "popped") {
+    if (t > b.nextAt) spawnBalloon(t);
+    return;
+  }
+  if (b.state === "vanishing") {
+    b.fade -= 0.06;
+    if (b.fade <= 0) {
+      b.fade = 0;
+      b.state = "hidden";
+      b.appearAt = t + rand(1200, 2200);
+    }
+    return;
+  }
+  if (b.state === "hidden") {
+    if (t > b.appearAt) {
+      placeAwayFromPlayer(b);
+      b.state = "appearing";
+      sparkle(b);
+      sounds.appear();
+    }
+    return;
+  }
+  if (b.state === "appearing") {
+    b.fade += 0.05;
+    if (b.fade >= 1) {
+      b.fade = 1;
+      b.state = "visible";
+      b.vanishAt = t + rand(5000, 9000);
+    }
+  }
+
+  if (b.state === "visible" && t > b.vanishAt) vanish(b, t);
+}
+
+function vanish(b) {
+  b.state = "vanishing";
+  player.chase = false;
+  const top = b.y - balloonRadius(b);
+  for (let i = 0; i < 18; i++) {
+    particles.push({
+      x: b.x + rand(-30, 30) * U, y: top + rand(-30, 30) * U, vx: rand(-1.5, 1.5), vy: rand(-1.5, 0.5),
+      life: 1, decay: 0.015, size: rand(14, 26) * U, color: "#ffffffaa", gravity: -0.02, shape: "puff",
+    });
+  }
+  texts.push({ x: b.x, y: top - balloonRadius(b), text: "💨", life: 1, size: 60 * U });
+  sounds.vanish();
+}
+
+function sparkle(b) {
+  const top = b.y - balloonRadius(b) * 1.1;
+  for (let i = 0; i < 24; i++) {
+    const a = rand(0, Math.PI * 2);
+    const s = rand(1, 5);
+    particles.push({
+      x: b.x, y: top, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+      life: 1, decay: 0.025, size: rand(4, 9) * U, color: pick(["#fff7b0", "#ffffff", b.color]),
+      gravity: 0, shape: "star",
+    });
+  }
+}
+
+function reachGap() {
+  return balloonRadius() + 34 * U * depth(player.y);
+}
+
+function inReach() {
+  const b = balloon;
+  if (b.state !== "visible" && b.state !== "appearing") return false;
+  return Math.abs(b.x - player.x) < reachGap() + 30 * U && Math.abs(b.y - player.y) < 45 * U;
+}
+
+function onBalloon(x, y) {
+  const b = balloon;
+  if (b.state !== "visible" && b.state !== "appearing") return false;
+  const R = balloonRadius(b);
+  const cy = b.y - R * 1.1;
+  return Math.hypot(x - b.x, (y - cy) / 1.15) < R + 30 * U;
+}
+
+function poke(t) {
+  player.pokeAt = t;
+  player.readyAt = t + POKE_EVERY;
+  if (!over && inReach()) {
+    player.facing = Math.sign(balloon.x - player.x) || player.facing;
+    hit(balloon, t);
+  } else {
+    sounds.swish();
+  }
+}
+
+function hit(b, t) {
+  const side = Math.sign(player.x - b.x) || 1;
+  b.pokes++;
+  b.hurtAt = t;
+  const angle = (side > 0 ? 0 : Math.PI) + rand(-0.6, 0.6);
+  b.holes.push({ a: angle, at: t });
+  const R = balloonRadius(b);
+  const cy = b.y - R * 1.1;
+  texts.push({ x: b.x + side * R, y: cy - R * 0.5, text: pick(["Ahi!", "Pic!", "Ouch!", "Pss!"]), life: 1, size: 34 * U });
+  for (let i = 0; i < 10; i++) {
+    particles.push({
+      x: b.x + Math.cos(angle) * R, y: cy + Math.sin(angle) * R * 1.1,
+      vx: Math.cos(angle) * rand(2, 6) + rand(-1, 1), vy: Math.sin(angle) * rand(2, 6) + rand(-1, 1),
+      life: 1, decay: 0.04, size: rand(4, 9) * U, color: "#ffffffcc", gravity: 0, shape: "puff",
+    });
+  }
+  sounds.pic();
+  if (b.pokes >= b.needed) {
+    pop(b, t);
+  } else if (b.pokes > 1 && Math.random() < 0.2) {
+    vanish(b);
+  }
+}
+
+function pop(b, t) {
+  const R = balloonRadius(b);
+  const cy = b.y - R * 1.1;
+  b.state = "popped";
+  b.nextAt = t + 1800;
+  player.chase = false;
+  for (let i = 0; i < 90; i++) {
+    const a = rand(0, Math.PI * 2);
+    const s = rand(3, 13);
+    particles.push({
+      x: b.x + Math.cos(a) * R * 0.5, y: cy + Math.sin(a) * R * 0.5, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 3,
+      life: 1, decay: rand(0.008, 0.016), size: rand(6, 14) * U, color: pick([b.color, b.color, ...CROWD_COLORS]),
+      gravity: 0.25, shape: "confetti", spin: rand(-0.3, 0.3), angle: rand(0, 6),
+    });
+  }
+  texts.push({ x: b.x, y: cy, text: "PUM!", life: 1, size: 110 * U, color: "#ffd60a" });
+  cheerUntil = t + 2500;
+  sounds.boom();
+  sounds.cheer();
+  round++;
+  showHud();
+  if (round >= ROUNDS.length) {
+    over = true;
+    trophies++;
+    try { localStorage.setItem(TROPHY_KEY, trophies); } catch {}
+    showHud();
+    setTimeout(() => {
+      sounds.fanfare();
+      winEl.classList.add("show");
+    }, 1400);
+  }
+}
+
+function updatePlayer(t) {
+  const target = { x: pointer.x, y: pointer.y };
+  const b = balloon;
+  if (player.chase && (b.state === "visible" || b.state === "appearing")) {
+    const side = Math.sign(player.x - b.x) || 1;
+    target.x = b.x + side * reachGap();
+    target.y = b.y;
+  }
+  keepInArena(target, 20 * U);
+  const dx = target.x - player.x;
+  const dy = target.y - player.y;
+  const dist = Math.hypot(dx, dy);
+  const speed = PLAYER_SPEED * U;
+  player.running = dist > 6;
+  if (player.running) {
+    const step = Math.min(speed, dist);
+    player.x += (dx / dist) * step;
+    player.y += (dy / dist) * step;
+    player.step += 0.3;
+    if (Math.abs(dx) > 3) player.facing = Math.sign(dx);
+  }
+  keepInArena(player, 20 * U);
+
+  if (player.chase && t >= player.readyAt && inReach()) {
+    poke(t);
+    player.chase = false;
+    pointer = { x: player.x, y: player.y };
+  } else if (pressing && !player.chase && t >= player.readyAt) {
+    poke(t);
+  }
+}
+
+function drawStands(t) {
+  const bottom = A.cy - A.ry - 16 * U;
+  const g = ctx.createLinearGradient(0, 0, 0, bottom);
+  g.addColorStop(0, "#1b1035");
+  g.addColorStop(1, "#4a3378");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, innerWidth, bottom);
+
+  for (const x of [innerWidth * 0.15, innerWidth * 0.85]) {
+    const glow = ctx.createRadialGradient(x, 30, 4, x, 30, 160);
+    glow.addColorStop(0, "#fffbe0dd");
+    glow.addColorStop(1, "#fffbe000");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, 30, 160, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const cheering = t < cheerUntil;
+  for (const c of crowd) {
+    const jump = cheering ? Math.abs(Math.sin(t / 110 + c.phase)) * 12 * U : Math.sin(t / 600 + c.phase) * 1.5;
+    const y = c.y - jump;
+    const s = U;
+    if (cheering) {
+      ctx.strokeStyle = c.skin;
+      ctx.lineWidth = 5 * s;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-9 * s + c.x, y - 16 * s); ctx.lineTo(-15 * s + c.x, y - 34 * s);
+      ctx.moveTo(9 * s + c.x, y - 16 * s); ctx.lineTo(15 * s + c.x, y - 34 * s);
+      ctx.stroke();
+    }
+    ctx.fillStyle = c.shirt;
+    ctx.beginPath();
+    ctx.roundRect(c.x - 13 * s, y - 18 * s, 26 * s, 24 * s, 10 * s);
+    ctx.fill();
+    ctx.fillStyle = c.skin;
+    ctx.beginPath();
+    ctx.arc(c.x, y - 26 * s, 10 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawArena() {
+  const top = A.cy - A.ry - 16 * U;
+  ctx.fillStyle = "#2b2044";
+  ctx.fillRect(0, top, innerWidth, innerHeight - top);
+
+  ctx.lineWidth = 22 * U;
+  ctx.setLineDash([40 * U, 40 * U]);
+  for (const [color, offset] of [["#e63946", 0], ["#ffffff", 40 * U]]) {
+    ctx.strokeStyle = color;
+    ctx.lineDashOffset = offset;
+    ctx.beginPath();
+    ctx.ellipse(A.cx, A.cy, A.rx + 11 * U, A.ry + 8 * U, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  const sand = ctx.createRadialGradient(A.cx, A.cy - A.ry * 0.3, 10, A.cx, A.cy, Math.max(A.rx, A.ry));
+  sand.addColorStop(0, "#ffe8b0");
+  sand.addColorStop(1, "#e9b872");
+  ctx.fillStyle = sand;
+  ctx.beginPath();
+  ctx.ellipse(A.cx, A.cy, A.rx, A.ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "#ffffff88";
+  ctx.lineWidth = 4 * U;
+  ctx.beginPath();
+  ctx.ellipse(A.cx, A.cy, A.rx * 0.25, A.ry * 0.25, 0, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawBalloon(b, t) {
+  if (b.state === "popped" || b.state === "hidden") return;
+  const R = balloonRadius(b);
+  const hurt = clamp(1 - (t - b.hurtAt) / 500, 0, 1);
+  const wob = Math.sin((t - b.hurtAt) / 30) * 0.12 * hurt;
+  const nervous = b.pokes >= b.needed - 2;
+  const lookX = clamp((player.x - b.x) / 200, -1, 1);
+
+  ctx.save();
+  ctx.globalAlpha = b.fade;
+  ctx.fillStyle = "#00000033";
+  ctx.beginPath();
+  ctx.ellipse(b.x, b.y, R * 0.9, R * 0.25, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.translate(b.x + (nervous ? Math.sin(t / 25) * 2 : 0), b.y - R * 1.1);
+  ctx.scale(1 + wob, 1 - wob);
+
+  ctx.fillStyle = b.color;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(side * R * 0.45, R * 1.02, R * 0.28, R * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(side * R * 1.0, R * 0.15, R * 0.3, R * 0.17, side * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.roundRect(-R * 0.12, -R * 1.25, R * 0.24, R * 0.2, R * 0.05);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.ellipse(0, 0, R, R * 1.1, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffffff66";
+  ctx.beginPath();
+  ctx.ellipse(-R * 0.4, -R * 0.55, R * 0.2, R * 0.32, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  for (const hole of b.holes) {
+    const hx = Math.cos(hole.a) * R * 0.88;
+    const hy = Math.sin(hole.a) * R * 0.97;
+    ctx.fillStyle = "#00000088";
+    ctx.beginPath();
+    ctx.arc(hx, hy, R * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+    if (t - hole.at < 1200) {
+      ctx.strokeStyle = "#ffffffaa";
+      ctx.lineWidth = 3 * U;
+      ctx.lineCap = "round";
+      const out = Math.sign(Math.cos(hole.a));
+      for (let i = -1; i <= 1; i++) {
+        const len = R * (0.2 + 0.15 * Math.sin(t / 40 + i));
+        ctx.beginPath();
+        ctx.moveTo(hx + out * R * 0.1, hy + i * R * 0.08);
+        ctx.lineTo(hx + out * (R * 0.1 + len), hy + i * R * 0.16);
+        ctx.stroke();
+      }
+    }
+  }
+
+  const eyeY = -R * 0.2;
+  for (const side of [-1, 1]) {
+    const ex = side * R * 0.32;
+    if (hurt > 0.3) {
+      ctx.strokeStyle = "#222";
+      ctx.lineWidth = R * 0.07;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(ex - R * 0.1, eyeY - R * 0.1); ctx.lineTo(ex + R * 0.1, eyeY + R * 0.1);
+      ctx.moveTo(ex + R * 0.1, eyeY - R * 0.1); ctx.lineTo(ex - R * 0.1, eyeY + R * 0.1);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, R * 0.17, R * 0.21, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#222";
+      ctx.beginPath();
+      ctx.arc(ex + lookX * R * 0.07, eyeY + R * 0.03, R * 0.09, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  if (nervous) {
+    ctx.fillStyle = "#ff8fab";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(side * R * 0.55, R * 0.12, R * 0.13, R * 0.08, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#9ad1ff";
+    ctx.beginPath();
+    ctx.ellipse(R * 0.7, -R * 0.45, R * 0.06, R * 0.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#4a0f1f";
+  ctx.beginPath();
+  if (hurt > 0.3 || nervous) {
+    ctx.ellipse(0, R * 0.32, R * 0.14, R * 0.18, 0, 0, Math.PI * 2);
+  } else {
+    ctx.ellipse(0, R * 0.25, R * 0.3, R * 0.2, 0, 0, Math.PI);
+  }
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPin(x, y) {
+  ctx.strokeStyle = "#c9ced6";
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + 20, y);
+  ctx.stroke();
+  ctx.fillStyle = "#e63946";
+  ctx.beginPath();
+  ctx.roundRect(x - 3, y - 9, 6, 18, 3);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(x - 9, y - 5, 6, 10, 2);
+  ctx.fill();
+}
+
+function drawPlayer(t) {
+  const s = depth(player.y) * U;
+  const legSwing = player.running ? Math.sin(player.step) * 10 : 0;
+  const since = t - player.pokeAt;
+  const thrust = since < 200 ? Math.sin((since / 200) * Math.PI) * 22 : 0;
+
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.fillStyle = "#00000033";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 24 * s, 7 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.scale(player.facing * s, s);
+
+  const arm = (from, hand) => {
+    ctx.strokeStyle = "#ffd6a5";
+    ctx.lineWidth = 8;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(hand.x, hand.y);
+    ctx.stroke();
+    drawPin(hand.x + 2, hand.y);
+    ctx.fillStyle = "#ffd6a5";
+    ctx.beginPath();
+    ctx.arc(hand.x, hand.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  arm({ x: -2, y: -62 }, { x: 24 + thrust, y: -62 });
+
+  ctx.strokeStyle = "#1d3557";
+  ctx.lineWidth = 10;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-6, -30); ctx.lineTo(-6 + legSwing, -2);
+  ctx.moveTo(6, -30); ctx.lineTo(6 - legSwing, -2);
+  ctx.stroke();
+  ctx.fillStyle = "#222";
+  ctx.beginPath();
+  ctx.ellipse(-6 + legSwing + 3, -2, 9, 5, 0, 0, Math.PI * 2);
+  ctx.ellipse(6 - legSwing + 3, -2, 9, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ff9f1c";
+  ctx.beginPath();
+  ctx.roundRect(-16, -68, 32, 42, 10);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffd6a5";
+  ctx.beginPath();
+  ctx.arc(0, -86, 18, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#1982c4";
+  ctx.beginPath();
+  ctx.arc(0, -90, 18, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(0, -92, 26, 6);
+  ctx.fillStyle = "#222";
+  ctx.beginPath();
+  ctx.arc(8, -84, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#222";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  if (thrust > 0) {
+    ctx.moveTo(2, -74);
+    ctx.lineTo(13, -74);
+  } else {
+    ctx.arc(6, -78, 6, 0.1 * Math.PI, 0.7 * Math.PI);
+  }
+  ctx.stroke();
+
+  arm({ x: 4, y: -50 }, { x: 28 + thrust, y: -44 });
+  ctx.restore();
+}
+
+function drawCursor(t) {
+  if (!cursor) return;
+  const { x, y } = cursor;
+  const aiming = onBalloon(x, y);
+  const r = (aiming ? 40 : 34) + (pressing ? -6 : Math.sin(t / 200) * 3);
+  const color = aiming ? "#ffd60a" : "#ffffff";
+  ctx.save();
+  ctx.lineCap = "round";
+  for (const [stroke, width] of [["#2b2b52", 14], [color, 7]]) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      ctx.moveTo(x + dx * (r + 8), y + dy * (r + 8));
+      ctx.lineTo(x + dx * (r + 24), y + dy * (r + 24));
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = "40px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("📌", x + r * 0.55, y - r * 0.4);
+  ctx.restore();
+}
+
+function drawParticles() {
+  particles = particles.filter((p) => p.life > 0);
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += p.gravity;
+    p.vx *= 0.98;
+    p.life -= p.decay;
+    ctx.globalAlpha = clamp(p.life, 0, 1);
+    ctx.fillStyle = p.color;
+    if (p.shape === "confetti") {
+      p.angle += p.spin;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle);
+      ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+      ctx.restore();
+    } else {
+      const size = p.shape === "puff" ? p.size * (1.5 - p.life * 0.5) : p.size * p.life;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(0, size), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTexts() {
+  texts = texts.filter((w) => w.life > 0);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const w of texts) {
+    w.y -= 1.2;
+    w.life -= 0.015;
+    ctx.globalAlpha = clamp(w.life * 2, 0, 1);
+    ctx.font = `bold ${w.size * (1.2 - w.life * 0.2)}px "Comic Sans MS", "Chalkboard SE", sans-serif`;
+    ctx.lineWidth = w.size / 8;
+    ctx.strokeStyle = "#2b2b52";
+    ctx.strokeText(w.text, w.x, w.y);
+    ctx.fillStyle = w.color ?? "#fff";
+    ctx.fillText(w.text, w.x, w.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function tone(type, from, to, duration, volume = 0.2) {
+  if (!audio) return;
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, audio.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(to, audio.currentTime + duration);
+  gain.gain.setValueAtTime(volume, audio.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + duration);
+  osc.connect(gain).connect(audio.destination);
+  osc.start();
+  osc.stop(audio.currentTime + duration);
+}
+
+function noise(duration, fromFreq, toFreq, volume = 0.5) {
+  if (!audio) return;
+  const len = audio.sampleRate * duration;
+  const buffer = audio.createBuffer(1, len, audio.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * volume;
+  const src = audio.createBufferSource();
+  src.buffer = buffer;
+  const filter = audio.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(fromFreq, audio.currentTime);
+  filter.frequency.exponentialRampToValueAtTime(toFreq, audio.currentTime + duration);
+  const gain = audio.createGain();
+  gain.gain.setValueAtTime(volume, audio.currentTime);
+  gain.gain.linearRampToValueAtTime(0, audio.currentTime + duration);
+  src.connect(filter).connect(gain).connect(audio.destination);
+  src.start();
+}
+
+const sounds = {
+  swish: () => noise(0.12, 2500, 1200, 0.15),
+  pic: () => { tone("square", 1400, 700, 0.07, 0.12); noise(0.5, 6000, 4000, 0.35); },
+  boom: () => { noise(0.5, 2000, 150, 0.9); tone("triangle", 300, 60, 0.4, 0.3); },
+  cheer: () => noise(1.6, 1100, 800, 0.3),
+  vanish: () => tone("sine", 900, 150, 0.45, 0.2),
+  appear: () => tone("sine", 250, 1200, 0.35, 0.15),
+  fanfare: () => [523, 659, 784, 1047].forEach((f, i) =>
+    setTimeout(() => tone("triangle", f, f, 0.35, 0.25), i * 180)),
+};
+
+canvas.addEventListener("pointermove", (ev) => {
+  cursor = { x: ev.clientX, y: ev.clientY };
+  if (ev.pointerType === "mouse" || pressing) {
+    pointer = { x: ev.clientX, y: ev.clientY };
+    if (ev.pointerType === "mouse" && !pressing) player.chase = false;
+  }
+});
+
+canvas.addEventListener("pointerdown", (ev) => {
+  audio ??= new AudioContext();
+  pointer = { x: ev.clientX, y: ev.clientY };
+  cursor = { ...pointer };
+  pressing = true;
+  if (over) return;
+  if (onBalloon(ev.clientX, ev.clientY)) {
+    player.chase = true;
+    if (inReach()) {
+      player.chase = false;
+      poke(performance.now());
+    }
+  } else {
+    player.chase = false;
+    poke(performance.now());
+  }
+});
+
+for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+  canvas.addEventListener(type, () => { pressing = false; });
+}
+
+for (const button of document.querySelectorAll(".again")) button.addEventListener("click", start);
+
+function loop(t) {
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (!over) {
+    updatePlayer(t);
+    updateBalloon(balloon, t);
+  }
+  drawStands(t);
+  drawArena();
+
+  const drawables = [
+    { y: player.y, draw: () => drawPlayer(t) },
+    { y: balloon.y, draw: () => drawBalloon(balloon, t) },
+  ].sort((a, b) => a.y - b.y);
+  for (const d of drawables) d.draw();
+
+  drawParticles();
+  drawTexts();
+  drawCursor(t);
+  requestAnimationFrame(loop);
+}
+
+resize();
+start();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

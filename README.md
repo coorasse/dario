@@ -11,6 +11,9 @@ Play them at https://pietro.coorasse.com or open `index.html` in a browser and p
 - **Uni** 🦄 (`uni/`): a city at night, where monsters sit on the roofs and jump on you when you get close.
   Every time one lands on you, a heart flies away ❤️. The child follows the mouse, and a click shoots the magic
   torch 🔦. Defeat all the monsters to win a trophy 🏆.
+- **Scoppia** 🎈📌 (`scoppia/`): an arena with a crowd, where a little man holding two pins pokes a standing
+  inflatable until it explodes. Tap the inflatable and he runs to it and pokes it; tap again (or hold) to keep
+  poking. Watch out, the inflatable sometimes disappears and pops up somewhere else. Pop all three to win a trophy 🏆.
 
 ## Adding a new game
 

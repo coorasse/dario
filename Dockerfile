@@ -3,4 +3,5 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY index.html /usr/share/nginx/html/
 COPY alieni/ /usr/share/nginx/html/alieni/
 COPY uni/ /usr/share/nginx/html/uni/
+COPY scoppia/ /usr/share/nginx/html/scoppia/
 EXPOSE 8080
